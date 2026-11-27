@@ -1489,6 +1489,37 @@ impl gpui::Render for Framed {
     }
 }
 
+#[gpui::test]
+fn the_quit_shortcut_asks_the_app_without_quitting(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let code = nsh_bundler::compile_module(
+        "App.tsx",
+        r#"
+import { mount, signal } from "nsh";
+import { Input } from "nsh/base";
+import { Application } from "nsh/desktop";
+
+function App() {
+    const status = signal("waiting");
+    Application.on("quitRequest", () => status.set("quit requested"));
+    return <Input autoFocus value={status()} style={{ height: 30 }} />;
+}
+mount(App);
+"#,
+        &[],
+    )
+    .unwrap();
+    let (view, cx) = owned_view(cx, inline_options(), code, |_| {});
+    wait_for(&view, cx, "waiting");
+    flush_engine(&view, cx);
+    cx.simulate_keystrokes(if cfg!(target_os = "macos") {
+        "cmd-q"
+    } else {
+        "ctrl-q"
+    });
+    wait_for(&view, cx, "quit requested");
+}
+
 /// Opens a window whose root holds an [`AppView`] that owns the window,
 /// running `code`, with the keyboard in the view.
 fn owned_view(

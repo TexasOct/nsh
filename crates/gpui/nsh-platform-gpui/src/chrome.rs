@@ -81,7 +81,7 @@ use nsh_core::{
     EventKind, EventPayload, PayloadValue, ROOT_ID,
     desktop::{
         CloseReason, DesktopCommand, Key, MenuBarMode, MenuItem, MenuLabels, MenuRole, Shortcut,
-        TitleBarStyle, WindowAttributes, WindowMode,
+        TitleBarStyle, WindowAttributes, WindowEvent, WindowMode,
     },
     geometry::{Edges as Insets, Points},
 };
@@ -150,7 +150,6 @@ enum Op {
     /// The user asked to close the window (how), or the app did (`None`,
     /// `WindowRef.close()`, which `closeOnPress` does not hold back).
     Close(Option<CloseReason>),
-    Quit,
     Hide,
     HideOthers,
     ShowAll,
@@ -256,6 +255,8 @@ pub(crate) struct Chrome {
     /// Where a press on a `windowDrag` view began (window coordinates),
     /// until the window moves or the button is released.
     drag: Cell<Option<(f32, f32)>>,
+    /// Whether the app wants to decide what to do with a user quit request.
+    intercept_quit: Cell<bool>,
     /// Asked instead of quitting or closing, when set.
     pub(crate) on_close: RefCell<Option<CloseHandler>>,
 }
@@ -403,7 +404,8 @@ pub(crate) fn command(surface: &Rc<Surface>, command: &DesktopCommand) {
         DesktopCommand::Request(request) => crate::window::main_request(surface, request),
         // The main window is open already.
         DesktopCommand::OpenWindow(_) => {}
-        DesktopCommand::Quit => push(surface, Op::Quit),
+        DesktopCommand::SetQuitOnRequest(quit) => c.intercept_quit.set(!quit),
+        DesktopCommand::Quit => quit(surface),
         // The backend for embedding: when the app restarts is the embedding
         // app's to decide.
         DesktopCommand::Restart => {}
@@ -505,7 +507,7 @@ pub(crate) fn press_close(surface: &Rc<Surface>, reason: CloseReason) {
 /// about the rest.
 fn choose(surface: &Rc<Surface>, id: u32, role: Option<MenuRole>) {
     match role {
-        Some(MenuRole::Quit) => push(surface, Op::Quit),
+        Some(MenuRole::Quit) => request_quit(surface),
         Some(MenuRole::Close) => match crate::window::entered(surface) {
             Some(id) => crate::window::close_press(surface, id, CloseReason::Menu),
             None => press_close(surface, CloseReason::Menu),
@@ -626,8 +628,14 @@ fn primary(key: char) -> Shortcut {
     }
 }
 
+#[derive(Debug, PartialEq)]
+enum Reserved {
+    Quit,
+    Window(Op),
+}
+
 /// What the standalone window does with the keys it keeps for itself.
-fn reserved(platform: Platform, pressed: &Shortcut) -> Option<Op> {
+fn reserved(platform: Platform, pressed: &Shortcut) -> Option<Reserved> {
     let cmd = |key: char| Shortcut {
         meta: true,
         ..Shortcut::key(Key::Char(key))
@@ -635,25 +643,25 @@ fn reserved(platform: Platform, pressed: &Shortcut) -> Option<Op> {
     match platform {
         Platform::Mac => {
             if *pressed == cmd('q') {
-                Some(Op::Quit)
+                Some(Reserved::Quit)
             } else if *pressed == cmd('h') {
-                Some(Op::Hide)
+                Some(Reserved::Window(Op::Hide))
             } else if *pressed
                 == (Shortcut {
                     alt: true,
                     ..cmd('h')
                 })
             {
-                Some(Op::HideOthers)
+                Some(Reserved::Window(Op::HideOthers))
             } else if *pressed == cmd('m') {
-                Some(Op::Minimize)
+                Some(Reserved::Window(Op::Minimize))
             } else if *pressed
                 == (Shortcut {
                     ctrl: true,
                     ..cmd('f')
                 })
             {
-                Some(Op::ToggleFullScreen)
+                Some(Reserved::Window(Op::ToggleFullScreen))
             } else {
                 None
             }
@@ -665,9 +673,9 @@ fn reserved(platform: Platform, pressed: &Shortcut) -> Option<Op> {
                     ..Shortcut::key(Key::Char('q'))
                 })
             {
-                Some(Op::Quit)
+                Some(Reserved::Quit)
             } else if *pressed == Shortcut::key(Key::F(11)) {
-                Some(Op::ToggleFullScreen)
+                Some(Reserved::Window(Op::ToggleFullScreen))
             } else {
                 None
             }
@@ -686,7 +694,13 @@ pub(crate) fn window_key(surface: &Rc<Surface>, event: &KeyEvent) -> bool {
         return false;
     }
     match pressed(event).and_then(|p| reserved(PLATFORM, &p)) {
-        Some(op) => {
+        Some(Reserved::Quit) => {
+            if !event.repeat {
+                request_quit(surface);
+            }
+            true
+        }
+        Some(Reserved::Window(op)) => {
             if !event.repeat {
                 // A window of the app's own minimizes and goes to full
                 // screen itself; the rest is the app's.
@@ -765,6 +779,35 @@ pub(crate) fn ask_to_close(
     true
 }
 
+/// The menu or a shortcut requested quit. An embedding host's handler
+/// keeps precedence over the app's listener.
+fn request_quit(surface: &Rc<Surface>) {
+    if surface.chrome.on_close.borrow().is_none() && surface.chrome.intercept_quit.get() {
+        surface.event(
+            ROOT_ID,
+            EventKind::Window,
+            EventPayload::Window(Box::new(WindowEvent::QuitRequest)),
+        );
+    } else {
+        quit(surface);
+    }
+}
+
+/// An accepted quit must not wait for the hosting window to draw.
+fn quit(surface: &Rc<Surface>) {
+    let handler = surface.chrome.on_close.borrow().clone();
+    let window = surface.chrome.window();
+    crate::rt::on_app(move |cx| {
+        if let Some(handler) = handler {
+            if let Some(window) = window {
+                let _ = window.update(cx, |_, window, cx| handler(CloseRequest::Quit, window, cx));
+            }
+        } else {
+            cx.quit();
+        }
+    });
+}
+
 /// Carries out the queued window operations.
 fn apply_ops(surface: &Surface, window: &mut Window, cx: &mut App) {
     let ops = std::mem::take(&mut *surface.chrome.ops.borrow_mut());
@@ -808,11 +851,6 @@ fn apply_ops(surface: &Surface, window: &mut Window, cx: &mut App) {
             Op::Close(_) => {
                 if !ask_to_close(surface, CloseRequest::Close, window, cx) {
                     window.remove_window();
-                }
-            }
-            Op::Quit => {
-                if !ask_to_close(surface, CloseRequest::Quit, window, cx) {
-                    cx.quit();
                 }
             }
             Op::Hide => cx.hide(),
@@ -1886,12 +1924,12 @@ mod tests {
             ctrl: true,
             ..Shortcut::key(Key::Char('q'))
         };
-        assert_eq!(reserved(Platform::Linux, &ctrl_q), Some(Op::Quit));
+        assert_eq!(reserved(Platform::Linux, &ctrl_q), Some(Reserved::Quit));
         assert_eq!(reserved(Platform::Mac, &ctrl_q), None);
         let f11 = Shortcut::key(Key::F(11));
         assert_eq!(
             reserved(Platform::Windows, &f11),
-            Some(Op::ToggleFullScreen)
+            Some(Reserved::Window(Op::ToggleFullScreen))
         );
         let ctrl_cmd_f = Shortcut {
             ctrl: true,
@@ -1900,7 +1938,7 @@ mod tests {
         };
         assert_eq!(
             reserved(Platform::Mac, &ctrl_cmd_f),
-            Some(Op::ToggleFullScreen)
+            Some(Reserved::Window(Op::ToggleFullScreen))
         );
         // Ctrl+W is the app's to bind: not reserved.
         let ctrl_w = Shortcut {
