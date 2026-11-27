@@ -1719,7 +1719,6 @@ fn native_items(
         .collect()
 }
 
-/// Sets the application menu as macOS's menu bar.
 fn native_edit_action(role: Option<MenuRole>) -> Option<gpui::OsAction> {
     Some(match role? {
         MenuRole::Cut => gpui::OsAction::Cut,
@@ -1730,6 +1729,7 @@ fn native_edit_action(role: Option<MenuRole>) -> Option<gpui::OsAction> {
     })
 }
 
+/// Sets the application menu as macOS's menu bar.
 fn set_native_menus(surface: &Surface, cx: &mut App) {
     thread_local! {
         static LISTENING: Cell<bool> = const { Cell::new(false) };

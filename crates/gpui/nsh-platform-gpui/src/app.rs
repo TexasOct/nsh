@@ -375,10 +375,6 @@ impl AppView {
             options
         };
         crate::rt::init(cx);
-        // The focused field's caret follows the window's activation
-        // (`text_input::window_focus`, checked as the view is drawn).
-        cx.observe_window_activation(window, |_, _, cx| cx.notify())
-            .detach();
         bind_keys(cx);
         let surface = Surface::new(initial_environment());
         crate::chrome::set_app_name(&surface, &options.title);
