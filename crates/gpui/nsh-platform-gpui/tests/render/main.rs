@@ -327,7 +327,15 @@ const ZOOMED: &[((f32, f32), [u8; 3], &str)] = &[
     ((230.0, 100.0), WHITE, "outside the scroll view"),
 ];
 
+#[cfg(target_os = "macos")]
+mod tray;
+
 fn main() {
+    #[cfg(target_os = "macos")]
+    if std::env::var_os("NSH_RUNNER_TRAY_TEST").is_some() {
+        tray::run();
+        return;
+    }
     if !cfg!(feature = "js") {
         eprintln!("no JS engine here: skipped");
         return;

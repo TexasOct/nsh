@@ -76,6 +76,10 @@ dist/nsh/runtime/gpui/nsh-gpui-host --bundle build/bundle.nshc --window-size 390
 
 `--window-size` is the window's size in points (`<width>x<height>`).
 
+On macOS, the development host shows a native menu bar item for apps that call `Tray.set(...)` from `nsh/desktop`.
+The item remains available while the app window is hidden. When you embed an `AppView`, your host app still owns
+its system tray.
+
 ## Packaging
 
 A GPUI app ships NSH inside its own executable: it embeds the app's Rust root or TSX bundle with `AppView` ([Embedding in a GPUI

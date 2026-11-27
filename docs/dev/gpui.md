@@ -10,6 +10,17 @@ retained view per node, NSH draws every view itself, and the input, scrolling, t
 the Windows backend's, platform-free. Only drawing, text, the main-thread queue, events and the window are GPUI's.
 User-facing page: `website/docs/gpui.md`.
 
+On macOS, `run_app` handles the existing `SetTray` command with an AppKit status item. The runner surface owns that
+item and its menu and image loads. It updates without a window frame and removes the item on clear, reload or stop.
+`open_app_window` and embedded `AppView`s (including ones that call `own_window`) leave the tray to their host.
+Windows and Linux GPUI runners do not handle `SetTray`.
+
+In a logged-in macOS session, run the native tray regression from `crates/gpui`:
+
+```sh
+NSH_RUNNER_TRAY_TEST=1 cargo test --locked -p nsh-platform-gpui --features runtime-shaders,shot --test render
+```
+
 Set `AppOptions::inline_root` to `true` when calling `AppView::new` to render a plain JS root (`mount(App)`) in the
 hosting view, as in `examples/embed-gpui`. The option is independent of `AppView::own_window` and the order in which
 it and `AppView::load` are called. It only suppresses the implicit first window: the desktop OS and idiom are unchanged,
