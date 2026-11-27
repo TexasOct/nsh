@@ -59,7 +59,6 @@ mod system;
 mod text;
 mod text_input;
 mod transition;
-mod tray;
 mod view;
 mod window;
 
@@ -93,7 +92,6 @@ pub use crate::{
     chrome::titlebar_options,
     image::AssetBase,
     native::{ComponentContext, ComponentFactory, Components, NativeComponent},
-    tray::{TrayActivation, TrayHost},
 };
 
 /// Clears NSH text selections when the host delivers a press directly to
