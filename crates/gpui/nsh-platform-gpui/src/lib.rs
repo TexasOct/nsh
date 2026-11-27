@@ -95,3 +95,10 @@ pub use crate::{
     native::{ComponentContext, ComponentFactory, Components, NativeComponent},
     tray::{TrayActivation, TrayHost},
 };
+
+/// Clears NSH text selections when the host delivers a press directly to
+/// a native view instead of through the NSH surface.
+pub fn release_selections() {
+    crate::text::clear_selection();
+    crate::selectable_view::clear_all();
+}
