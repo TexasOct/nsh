@@ -201,6 +201,8 @@ pub(crate) struct Chrome {
     /// The surface fills a window of its own ([`set_standalone`]); an
     /// embedded surface's host owns the window: only context menus work.
     standalone: Cell<bool>,
+    /// This window hosts a runner, not an app window.
+    pub(crate) runner: Cell<bool>,
     /// Activation must work even while the window is not rendering.
     window: Cell<Option<AnyWindowHandle>>,
     /// The mode the window opens in, while it waits hidden since it opened
@@ -498,6 +500,9 @@ impl Chrome {
 
 /// Asks to close the main window as the user did (`reason`).
 pub(crate) fn press_close(surface: &Rc<Surface>, reason: CloseReason) {
+    if surface.chrome.runner.get() {
+        return;
+    }
     if close_press(surface, reason) {
         push(surface, Op::Close(Some(reason)));
     }
