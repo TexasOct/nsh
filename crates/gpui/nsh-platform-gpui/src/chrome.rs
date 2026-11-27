@@ -421,11 +421,13 @@ pub(crate) fn command(surface: &Rc<Surface>, command: &DesktopCommand) {
             *c.menu.borrow_mut() = menu.clone();
             c.menu_changed.set(true);
             menus::menu_changed(surface);
+            refresh_native_menu_later(surface);
             surface.invalidate();
         }
         DesktopCommand::SetMenuLabels(labels) => {
             c.labels.replace((**labels).clone());
             c.menu_changed.set(true);
+            refresh_native_menu_later(surface);
             surface.invalidate();
         }
         DesktopCommand::SetMenuBar(mode) => {
@@ -1047,9 +1049,7 @@ pub(crate) fn render(
     observe(surface, window, cx);
     let c = &surface.chrome;
     let standalone = c.standalone.get();
-    if standalone && PLATFORM == Platform::Mac && c.menu_changed.replace(false) {
-        set_native_menus(surface, cx);
-    }
+    refresh_native_menu(surface, cx);
     let theme = Theme::new(crate::system::dark(surface));
     let shows_bars = standalone && !c.full_screen.get();
     let hide = hidden(surface);
@@ -1547,6 +1547,25 @@ struct MenuCommand {
 /// The context no element has: the native menus' key bindings only show
 /// their shortcuts (nsh matches them in [`shortcut`]).
 const MENU_SHORTCUT_CONTEXT: &str = "nsh_menu_shortcut";
+
+/// The native menu remains usable even when the host window is not drawing.
+pub(crate) fn refresh_native_menu_later(surface: &Rc<Surface>) {
+    if PLATFORM == Platform::Mac && surface.chrome.standalone.get() {
+        let surface = Rc::downgrade(surface);
+        crate::rt::on_app(move |cx| {
+            if let Some(surface) = surface.upgrade() {
+                refresh_native_menu(&surface, cx);
+            }
+        });
+    }
+}
+
+fn refresh_native_menu(surface: &Surface, cx: &mut App) {
+    let c = &surface.chrome;
+    if PLATFORM == Platform::Mac && c.standalone.get() && c.menu_changed.replace(false) {
+        set_native_menus(surface, cx);
+    }
+}
 
 /// The standalone app's menu on macOS until the app sets one.
 fn default_mac_menu(title: &str) -> Arc<[MenuItem]> {
