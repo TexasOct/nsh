@@ -499,6 +499,8 @@ impl Surface {
     /// Stops the app and removes its views.
     pub(crate) fn stop(&self) {
         self.generation.set(self.generation.get() + 1);
+        #[cfg(target_os = "macos")]
+        self.chrome.clear_runner_tray();
         // Dropping the engine joins its thread.
         self.control.borrow_mut().take();
         self.engine.borrow_mut().take();

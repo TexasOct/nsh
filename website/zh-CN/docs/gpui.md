@@ -64,6 +64,9 @@ dist/nsh/runtime/gpui/nsh-gpui-host --bundle build/bundle.nshc --window-size 390
 
 `--window-size` 是窗口的尺寸，单位为点（`<宽>x<高>`）。
 
+在 macOS 上，开发宿主会为调用 `nsh/desktop` 中 `Tray.set(...)` 的应用显示原生菜单栏项。应用窗口隐藏后，菜单栏项仍可使用。
+嵌入 `AppView` 时，系统托盘仍由宿主应用管理。
+
 ## 打包
 
 GPUI 应用把 NSH 放在自己的可执行文件里：它用 `AppView` 嵌入应用的 Rust 根组件或 TSX bundle（[嵌入 GPUI 应用](#嵌入-gpui-应用)），并作为
