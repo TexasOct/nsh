@@ -99,6 +99,9 @@ pub(crate) fn key_stroke(
     let Some(table) = surface.keymap.table.borrow().clone() else {
         return false;
     };
+    if crate::text_input::ime::marked_text_range(surface).is_some() {
+        return false;
+    }
     // The dev host's Ctrl+R / Cmd+R reloads, whatever the app binds.
     if cfg!(feature = "dev") && keystroke.reloads(OS) {
         return false;
@@ -311,6 +314,46 @@ mod tests {
         *surface.keymap.table.borrow_mut() = Some(std::sync::Arc::new(Keymap::new(vec![passing])));
         crate::keymap::released_stroke(&surface, &question);
         assert!(!press(question));
+    }
+
+    #[test]
+    fn active_ime_composition_suppresses_keymap_bindings() {
+        use nsh_core::keymap::{KeyBinding, Keymap, Keystroke, When};
+
+        use super::{KeyEvent, key_stroke};
+        use crate::{keys::VK_ESCAPE, surface::Surface, text_input, view::NshView};
+
+        let surface = Surface::new(nsh_engine::Environment::default());
+        let escape = Keystroke::parse_with("escape", true).unwrap();
+        let binding = KeyBinding::new(1, escape, When::Always, false);
+        *surface.keymap.table.borrow_mut() = Some(std::sync::Arc::new(Keymap::new(vec![binding])));
+
+        let view = NshView::new(20, nsh_core::ViewKind::Input);
+        view.insert_before(&surface.root, None);
+        text_input::focus_for_test(&surface, &view);
+        text_input::ime::replace_and_mark_text_in_range(&surface, None, "ni", None);
+
+        let press = || {
+            key_stroke(
+                &surface,
+                &KeyEvent {
+                    vk: VK_ESCAPE,
+                    down: true,
+                    repeat: false,
+                    modifiers: Default::default(),
+                },
+                true,
+                None,
+            )
+        };
+        assert!(
+            !press(),
+            "IME composition must not be interrupted by keymap bindings"
+        );
+        text_input::ime::unmark_text(&surface);
+        surface.keymap.held.set(None);
+        assert!(press(), "keymap binding must resume once composition ends");
+        text_input::surface_stopped(surface.key());
     }
 
     #[test]

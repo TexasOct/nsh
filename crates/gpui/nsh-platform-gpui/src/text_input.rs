@@ -1086,6 +1086,7 @@ pub(crate) fn window_focus(surface: &Rc<Surface>, has_focus: bool) -> bool {
     });
     if changed && !has_focus {
         disarm(surface);
+        ime::unmark_text(surface);
     }
     if !changed {
         return false;
@@ -2273,6 +2274,28 @@ pub(crate) fn key(surface: &Rc<Surface>, event: &KeyEvent) -> bool {
     };
     // Command+Left / Right on macOS: the line's edges (Home / End's).
     let edge = mac && m.meta && (vk == VK_LEFT || vk == VK_RIGHT);
+    // On macOS, AppKit's input context sees keys first whenever marked text is
+    // active (`handleEvent:`). Reaching this handler for Delete, Backspace, or
+    // Return—or a command/control shortcut via `doCommandBySelector:`—means
+    // the IME declined to consume the key: commit any remaining marked text
+    // before acting.
+    if mac && input.composing() {
+        match vk {
+            VK_BACK | VK_DELETE => {
+                if editable {
+                    ime::unmark_text(surface);
+                }
+            }
+            VK_RETURN => {
+                ime::unmark_text(surface);
+                return true;
+            }
+            _ if is_command(m) || (m.ctrl && !m.meta && !m.alt) => {
+                ime::unmark_text(surface);
+            }
+            _ => return false,
+        }
+    }
     match vk {
         // The input method takes the keys it composes with.
         _ if input.composing() => false,
@@ -2335,10 +2358,15 @@ pub(crate) fn key(surface: &Rc<Surface>, event: &KeyEvent) -> bool {
                 }
                 (model.delete(unit, vk == VK_DELETE), empty)
             };
-            // Backspace in an empty field deletes nothing but is still a
+            // Backspace/Delete in an empty field deletes nothing but is still a
             // key press.
             if deleted || empty {
-                key_press(surface, &view, "Backspace");
+                let key_name = if vk == VK_DELETE {
+                    "Delete"
+                } else {
+                    "Backspace"
+                };
+                key_press(surface, &view, key_name);
             }
             input.goal_x.set(None);
             after_edit(surface, &view, &input, deleted);
@@ -2386,6 +2414,97 @@ pub(crate) fn key(surface: &Rc<Surface>, event: &KeyEvent) -> bool {
                 if editable && input.model.borrow_mut().redo() {
                     after_edit(surface, &view, &input, true);
                 }
+                true
+            }
+            _ => false,
+        },
+        // Standard Cocoa / Emacs text-editing shortcuts on macOS (AppKit's
+        // `doCommandBySelector:` forwards them here without selector context).
+        _ if mac && m.ctrl && !m.meta && !m.alt => match vk {
+            0x41 => {
+                input.goal_x.set(None);
+                moved(&|model| {
+                    let caret = model.caret();
+                    let to = model.text()[..caret].rfind('\n').map_or(0, |i| i + 1);
+                    model.move_to(to, m.shift);
+                })
+            }
+            0x45 => {
+                input.goal_x.set(None);
+                moved(&|model| {
+                    let caret = model.caret();
+                    let to = model.text()[caret..]
+                        .find('\n')
+                        .map_or(model.text().len(), |i| caret + i);
+                    model.move_to(to, m.shift);
+                })
+            }
+            0x42 => {
+                input.goal_x.set(None);
+                moved(&|model| model.step(Unit::Char, false, m.shift))
+            }
+            0x46 => {
+                input.goal_x.set(None);
+                moved(&|model| model.step(Unit::Char, true, m.shift))
+            }
+            0x50 if multiline => {
+                let to = vertical(&input, false, false);
+                moved(&|model| model.move_to(to, m.shift))
+            }
+            0x4E if multiline => {
+                let to = vertical(&input, true, false);
+                moved(&|model| model.move_to(to, m.shift))
+            }
+            0x44 if !m.shift => {
+                if !editable {
+                    return true;
+                }
+                let (deleted, empty) = {
+                    let mut model = input.model.borrow_mut();
+                    let empty = model.text().is_empty();
+                    (model.delete(Unit::Char, true), empty)
+                };
+                if deleted || empty {
+                    key_press(surface, &view, "Delete");
+                }
+                input.goal_x.set(None);
+                after_edit(surface, &view, &input, deleted);
+                true
+            }
+            0x48 if !m.shift => {
+                if !editable {
+                    return true;
+                }
+                let (deleted, empty) = {
+                    let mut model = input.model.borrow_mut();
+                    let empty = model.text().is_empty();
+                    (model.delete(Unit::Char, false), empty)
+                };
+                if deleted || empty {
+                    key_press(surface, &view, "Backspace");
+                }
+                input.goal_x.set(None);
+                after_edit(surface, &view, &input, deleted);
+                true
+            }
+            0x4B if !m.shift => {
+                if !editable {
+                    return true;
+                }
+                let deleted = {
+                    let mut model = input.model.borrow_mut();
+                    if !model.has_selection() {
+                        let caret = model.caret();
+                        let text = model.text();
+                        let to = text[caret..]
+                            .find('\n')
+                            .map_or(text.len(), |i| caret + if i == 0 { 1 } else { i });
+                        model.move_to(to, true);
+                    }
+                    model.delete(Unit::Char, true)
+                };
+                input.goal_x.set(None);
+                after_edit(surface, &view, &input, deleted);
                 true
             }
             _ => false,
@@ -3066,5 +3185,91 @@ mod tests {
         // the text.
         assert_eq!(m.text_at(2, false), 1);
         assert_eq!(m.text_at(4, false), 2);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_delete_and_backspace_work_when_ime_delegates_during_composition() {
+        let surface = Surface::new(nsh_engine::Environment::default());
+        let view = NshView::new(12, nsh_core::ViewKind::Input);
+        view.insert_before(&surface.root, None);
+        focus_for_test(&surface, &view);
+        let input = input_of(&view).unwrap();
+        input.model.borrow_mut().set_text("abc");
+        input.model.borrow_mut().select(1, 1);
+        ime::replace_and_mark_text_in_range(&surface, None, "x", None);
+        let del = KeyEvent {
+            vk: VK_DELETE,
+            down: true,
+            repeat: false,
+            modifiers: Modifiers::default(),
+        };
+        assert!(key(&surface, &del));
+        assert!(!input.composing());
+        assert_eq!(input.model.borrow().text(), "axc");
+        // Now composing at end and hitting Backspace commits + deletes backward.
+        input.model.borrow_mut().select(3, 3);
+        ime::replace_and_mark_text_in_range(&surface, None, "y", None);
+        let back = KeyEvent {
+            vk: VK_BACK,
+            down: true,
+            repeat: false,
+            modifiers: Modifiers::default(),
+        };
+        assert!(key(&surface, &back));
+        assert!(!input.composing());
+        assert_eq!(input.model.borrow().text(), "axc");
+        surface_stopped(surface.key());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_control_navigation_and_select_all_work_during_and_after_composition() {
+        let surface = Surface::new(nsh_engine::Environment::default());
+        let view = NshView::new(13, nsh_core::ViewKind::Input);
+        view.insert_before(&surface.root, None);
+        focus_for_test(&surface, &view);
+        let input = input_of(&view).unwrap();
+        input.config.borrow_mut().multiline = true;
+        input.model.borrow_mut().set_text("abc\ndef");
+        input.model.borrow_mut().select(1, 1);
+        let ctrl = Modifiers {
+            ctrl: true,
+            ..Default::default()
+        };
+        assert!(key(
+            &surface,
+            &KeyEvent {
+                vk: 0x45,
+                down: true,
+                repeat: false,
+                modifiers: ctrl,
+            }
+        ));
+        assert_eq!(input.model.borrow().selection(), (3, 3));
+        assert!(key(
+            &surface,
+            &KeyEvent {
+                vk: 0x41,
+                down: true,
+                repeat: false,
+                modifiers: ctrl,
+            }
+        ));
+        assert_eq!(input.model.borrow().selection(), (0, 0));
+        ime::replace_and_mark_text_in_range(&surface, None, "z", None);
+        assert!(key(
+            &surface,
+            &KeyEvent {
+                vk: 0x41,
+                down: true,
+                repeat: false,
+                modifiers: command(),
+            }
+        ));
+        assert!(!input.composing());
+        assert_eq!(input.model.borrow().text(), "zabc\ndef");
+        assert_eq!(input.model.borrow().selection(), (0, 8));
+        surface_stopped(surface.key());
     }
 }
