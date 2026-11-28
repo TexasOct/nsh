@@ -1139,10 +1139,6 @@ fn open(
     let handle = cx.open_window(window_options, move |window, cx| {
         let view: Entity<AppView> = cx.new(|cx| AppView::new(options, window, cx));
         view.read(cx).own_window(window, cx);
-        #[cfg(target_os = "macos")]
-        if runner {
-            view.read(cx).surface().chrome.enable_runner_tray();
-        }
         crate::chrome::refresh_native_menu_later(view.read(cx).surface());
         view.read(cx).surface().chrome.runner.set(runner);
         view.read(cx)

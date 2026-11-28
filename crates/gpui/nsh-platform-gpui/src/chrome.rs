@@ -50,8 +50,6 @@
 //! handler instead when it set one ([`crate::AppView::on_close_request`]).
 
 mod menus;
-#[cfg(target_os = "macos")]
-mod tray;
 
 use std::{
     cell::{Cell, RefCell},
@@ -205,8 +203,6 @@ pub(crate) struct Chrome {
     standalone: Cell<bool>,
     /// This window hosts a runner, not an app window.
     pub(crate) runner: Cell<bool>,
-    #[cfg(target_os = "macos")]
-    runner_tray: std::cell::OnceCell<tray::RunnerTray>,
     /// Activation must work even while the window is not rendering.
     window: Cell<Option<AnyWindowHandle>>,
     /// The mode the window opens in, while it waits hidden since it opened
@@ -393,19 +389,6 @@ fn push(surface: &Surface, op: Op) {
 
 // --- Commands ---------------------------------------------------------------------------
 
-#[cfg(target_os = "macos")]
-impl Chrome {
-    pub(crate) fn enable_runner_tray(&self) {
-        self.runner_tray.get_or_init(tray::RunnerTray::default);
-    }
-
-    pub(crate) fn clear_runner_tray(&self) {
-        if let Some(tray) = self.runner_tray.get() {
-            tray.clear();
-        }
-    }
-}
-
 /// A desktop command for the main window (on the root).
 pub(crate) fn command(surface: &Rc<Surface>, command: &DesktopCommand) {
     let c = &surface.chrome;
@@ -437,10 +420,6 @@ pub(crate) fn command(surface: &Rc<Surface>, command: &DesktopCommand) {
         }
         DesktopCommand::SetMenuLabels(labels) => {
             c.labels.replace((**labels).clone());
-            #[cfg(target_os = "macos")]
-            if let Some(tray) = c.runner_tray.get() {
-                tray.relabel(surface);
-            }
             c.menu_changed.set(true);
             refresh_native_menu_later(surface);
             surface.invalidate();
@@ -460,16 +439,9 @@ pub(crate) fn command(surface: &Rc<Surface>, command: &DesktopCommand) {
             };
             menus::open(surface, menus::Kind::App, items.clone(), anchor, false);
         }
-        DesktopCommand::SetTray(tray) => {
-            #[cfg(target_os = "macos")]
-            if let Some(presenter) = c.runner_tray.get() {
-                presenter.set(surface, tray.as_ref());
-            }
-            #[cfg(not(target_os = "macos"))]
-            let _ = tray;
-        }
-        // Global shortcuts are the host app's to manage.
-        DesktopCommand::RegisterGlobalShortcut { .. }
+        // The host app owns the tray and global shortcuts.
+        DesktopCommand::SetTray(_)
+        | DesktopCommand::RegisterGlobalShortcut { .. }
         | DesktopCommand::UnregisterGlobalShortcut(_) => {}
         // Commands added later.
         #[allow(unreachable_patterns)]

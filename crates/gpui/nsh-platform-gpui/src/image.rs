@@ -459,11 +459,6 @@ pub(crate) struct MenuIcon {
 }
 
 impl MenuIcon {
-    #[cfg(target_os = "macos")]
-    pub(crate) fn native_pixels(&self) -> Option<(&[u8], bool)> {
-        Some((self.texture.image().as_bytes(0)?, self.template))
-    }
-
     /// Its size in pixels.
     pub(crate) fn size(&self) -> (u32, u32) {
         let size = self.texture.image().size(0);
@@ -510,20 +505,6 @@ pub(crate) fn load_menu_icon(
     scale: f32,
     done: impl FnOnce(Result<MenuIcon, String>) + 'static,
 ) -> Option<Load> {
-    load_sized_icon(
-        surface,
-        source,
-        nsh_core::desktop::menu_icon::want(scale),
-        done,
-    )
-}
-
-pub(crate) fn load_sized_icon(
-    surface: &Surface,
-    source: &ImageSource,
-    want: Want,
-    done: impl FnOnce(Result<MenuIcon, String>) + 'static,
-) -> Option<Load> {
     let done = move |result: Result<(Picture, Lease), String>| {
         done(result.map(|(picture, _)| MenuIcon {
             texture: picture.texture.clone(),
@@ -533,8 +514,8 @@ pub(crate) fn load_sized_icon(
     };
     fetch(
         surface,
-        &source.at_pixel_ratio(want.scale),
-        want,
+        &source.at_pixel_ratio(scale),
+        nsh_core::desktop::menu_icon::want(scale),
         Frames::First,
         Priority::Visible,
         None,
